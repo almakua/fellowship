@@ -1,0 +1,65 @@
+---
+# =============================================================================
+# Playbook: Remove Worker Node
+# =============================================================================
+# Rimuove un worker node dal cluster
+#
+# Uso:
+#   ansible-playbook playbooks/remove-worker.yml -e "node_to_remove=hostname"
+# =============================================================================
+
+- name: Drain and remove worker from cluster
+  hosts: k3s_masters
+  gather_facts: false
+  become: true
+
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+  tasks:
+    - name: Verify node_to_remove is defined
+      ansible.builtin.fail:
+        msg: "You must specify the node to remove: -e 'node_to_remove=hostname'"
+      when: node_to_remove is not defined
+
+    - name: Drain the node
+      ansible.builtin.command: >
+        k3s kubectl drain {{ node_to_remove }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --force
+        --timeout=300s
+      register: drain_result
+      failed_when: false
+      changed_when: drain_result.rc == 0
+
+    - name: Delete node from cluster
+      ansible.builtin.command: k3s kubectl delete node {{ node_to_remove }}
+      register: delete_result
+      failed_when: false
+      changed_when: delete_result.rc == 0
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: "Node {{ node_to_remove }} removed from cluster"
+
+- name: Uninstall k3s from removed node
+  hosts: "{{ node_to_remove }}"
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Run k3s uninstall script
+      ansible.builtin.command: /usr/local/bin/k3s-agent-uninstall.sh
+      failed_when: false
+      changed_when: true
+
+    - name: Clean up k3s directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher
+        - /var/lib/rancher
+        - /var/lib/kubelet
+

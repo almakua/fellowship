@@ -1,0 +1,155 @@
+---
+# =============================================================================
+# Playbook: Preparazione base Debian 13
+# =============================================================================
+# Esegue setup iniziale su tutti i nodi del cluster
+# - Aggiornamento sistema
+# - Installazione pacchetti base
+# - Configurazione timezone/locale
+# - Configurazione hostname e /etc/hosts
+# =============================================================================
+
+- name: Prepare Debian 13 servers
+  hosts: k3s_cluster
+  gather_facts: true
+  become: true
+
+  tasks:
+    # =========================================================================
+    # Sistema base
+    # =========================================================================
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+
+    - name: Install essential packages
+      ansible.builtin.apt:
+        name:
+          # Networking
+          - curl
+          - wget
+          - ca-certificates
+          - gnupg
+          - apt-transport-https
+          # System tools
+          - vim
+          - htop
+          - iotop
+          - tmux
+          - git
+          - jq
+          - unzip
+          # Network tools
+          - net-tools
+          - dnsutils
+          - iputils-ping
+          - traceroute
+          - tcpdump
+          # NFS client (per tutti i nodi)
+          - nfs-common
+          # Python per Ansible
+          - python3
+          - python3-pip
+          - python3-kubernetes
+          # Container runtime dependencies
+          - iptables
+          - conntrack
+          - socat
+        state: present
+
+    # =========================================================================
+    # Timezone e Locale
+    # =========================================================================
+    - name: Set timezone
+      community.general.timezone:
+        name: "{{ timezone }}"
+
+    - name: Ensure locale exists
+      community.general.locale_gen:
+        name: "{{ locale }}"
+        state: present
+
+    # =========================================================================
+    # Hostname e /etc/hosts
+    # =========================================================================
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Configure /etc/hosts with all cluster nodes
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: ".*{{ item }}.*"
+        line: "{{ hostvars[item]['ansible_host'] }} {{ item }} {{ item }}.{{ internal_domain }}"
+        state: present
+      loop: "{{ groups['k3s_cluster'] }}"
+
+    # =========================================================================
+    # Kernel parameters per Kubernetes
+    # =========================================================================
+    - name: Load required kernel modules
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+        persistent: present
+      loop:
+        - br_netfilter
+        - overlay
+        - ip_tables
+        - ip_conntrack
+
+    - name: Set sysctl parameters for Kubernetes
+      ansible.posix.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_set: true
+        state: present
+        reload: true
+        sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+      loop:
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { name: 'net.ipv4.ip_forward', value: '1' }
+        - { name: 'net.ipv6.conf.all.forwarding', value: '1' }
+        - { name: 'fs.inotify.max_user_watches', value: '524288' }
+        - { name: 'fs.inotify.max_user_instances', value: '512' }
+
+    # =========================================================================
+    # Swap (K3s funziona anche con swap, ma meglio disabilitarla)
+    # =========================================================================
+    - name: Disable swap
+      ansible.builtin.command: swapoff -a
+      changed_when: false
+
+    - name: Remove swap from fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '\sswap\s'
+        state: absent
+
+    # =========================================================================
+    # Reboot se kernel è stato aggiornato
+    # =========================================================================
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Reboot if required
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        msg: "Reboot triggered by Ansible after kernel update"
+      when: reboot_required.stat.exists
+
+  handlers:
+    - name: Reboot system
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+

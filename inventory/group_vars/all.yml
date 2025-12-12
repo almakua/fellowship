@@ -1,0 +1,61 @@
+---
+# =============================================================================
+# Variabili globali per tutto il cluster
+# =============================================================================
+
+# Dominio interno
+internal_domain: mb.home
+
+# Dominio pubblico per Let's Encrypt
+public_domain: mbianchi.me
+
+# Timezone
+timezone: Europe/Rome
+
+# Locale
+locale: en_US.UTF-8
+
+# =============================================================================
+# NFS Configuration
+# =============================================================================
+nfs_server: aragorn
+nfs_server_ip: "{{ hostvars['aragorn']['ansible_host'] }}"
+nfs_export_path: /srv/nfs/k3s
+nfs_export_options: "rw,sync,no_subtree_check,no_root_squash"
+
+# =============================================================================
+# K3s Configuration
+# =============================================================================
+k3s_version: v1.31.2+k3s1  # Ultima stabile, aggiorna se necessario
+
+# Master node
+k3s_master_ip: "{{ hostvars['aragorn']['ansible_host'] }}"
+k3s_master_hostname: aragorn
+
+# Flannel backend
+k3s_flannel_backend: vxlan
+
+# ServiceLB IP range
+k3s_servicelb_range: "192.168.1.201-192.168.1.220"
+
+# Disabilita componenti non necessari
+k3s_disable:
+  - servicelb  # Lo abilitiamo con config custom per il range IP
+
+# =============================================================================
+# Cloudflare (per cert-manager DNS challenge)
+# =============================================================================
+cloudflare_email: ""  # TODO: inserisci la tua email Cloudflare
+# Il token API va in vault o come variabile d'ambiente
+# cloudflare_api_token: from vault or env
+
+# =============================================================================
+# Addons versions
+# =============================================================================
+helm_version: v3.16.2
+cert_manager_version: v1.16.2
+argocd_version: v2.13.1
+
+# Prometheus stack (via helm chart)
+kube_prometheus_stack_version: 66.2.1
+

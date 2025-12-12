@@ -1,0 +1,186 @@
+---
+# =============================================================================
+# Playbook: Deploy K3s Cluster
+# =============================================================================
+# Installa k3s master e worker nodes
+# =============================================================================
+
+# =============================================================================
+# FASE 1: Installazione K3s Server (Master)
+# =============================================================================
+- name: Deploy K3s Server
+  hosts: k3s_masters
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Check if k3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+
+    - name: Download k3s install script
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: /tmp/k3s-install.sh
+        mode: '0755'
+      when: not k3s_installed.stat.exists
+
+    - name: Build k3s server arguments
+      ansible.builtin.set_fact:
+        k3s_install_args: "{{ k3s_server_extra_args | join(' ') }}"
+
+    - name: Install k3s server
+      ansible.builtin.shell: |
+        INSTALL_K3S_VERSION="{{ k3s_version }}" \
+        INSTALL_K3S_EXEC="server {{ k3s_install_args }}" \
+        /tmp/k3s-install.sh
+      args:
+        creates: /usr/local/bin/k3s
+      environment:
+        INSTALL_K3S_SKIP_START: "false"
+
+    - name: Wait for k3s to be ready
+      ansible.builtin.wait_for:
+        path: /etc/rancher/k3s/k3s.yaml
+        state: present
+        timeout: 120
+
+    - name: Wait for node to be ready
+      ansible.builtin.command: k3s kubectl get nodes
+      register: kubectl_result
+      until: kubectl_result.rc == 0 and 'Ready' in kubectl_result.stdout
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Get k3s token
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token_raw
+
+    - name: Set k3s token fact
+      ansible.builtin.set_fact:
+        k3s_token: "{{ k3s_token_raw.content | b64decode | trim }}"
+
+    - name: Create .kube directory for root
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: '0700'
+
+    - name: Copy kubeconfig
+      ansible.builtin.copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: /root/.kube/config
+        remote_src: true
+        mode: '0600'
+
+    - name: Fetch kubeconfig to local machine
+      ansible.builtin.fetch:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "{{ playbook_dir }}/../kubeconfig.yaml"
+        flat: true
+
+    - name: Display join information
+      ansible.builtin.debug:
+        msg: |
+          K3s server installed successfully!
+          Server URL: https://{{ k3s_master_ip }}:6443
+
+# =============================================================================
+# FASE 2: Installazione K3s Agents (Workers)
+# =============================================================================
+- name: Deploy K3s Agents
+  hosts: k3s_workers
+  gather_facts: true
+  become: true
+  serial: 1  # Un worker alla volta per evitare problemi
+
+  vars:
+    k3s_token: "{{ hostvars[k3s_master_hostname]['k3s_token'] }}"
+
+  tasks:
+    - name: Check if k3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+
+    - name: Download k3s install script
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: /tmp/k3s-install.sh
+        mode: '0755'
+      when: not k3s_installed.stat.exists
+
+    - name: Install k3s agent
+      ansible.builtin.shell: |
+        INSTALL_K3S_VERSION="{{ k3s_version }}" \
+        K3S_URL="https://{{ k3s_master_ip }}:6443" \
+        K3S_TOKEN="{{ k3s_token }}" \
+        /tmp/k3s-install.sh agent
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Wait for k3s-agent service to start
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: started
+        enabled: true
+
+# =============================================================================
+# FASE 3: Verifica cluster
+# =============================================================================
+- name: Verify K3s Cluster
+  hosts: k3s_masters
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Wait for all nodes to be ready
+      ansible.builtin.command: k3s kubectl get nodes
+      register: nodes_result
+      until: >
+        nodes_result.rc == 0 and
+        (nodes_result.stdout | regex_findall('Ready') | length) >= (groups['k3s_cluster'] | length)
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Display cluster nodes
+      ansible.builtin.debug:
+        msg: "{{ nodes_result.stdout_lines }}"
+
+    - name: Get cluster info
+      ansible.builtin.command: k3s kubectl cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Display cluster info
+      ansible.builtin.debug:
+        msg: "{{ cluster_info.stdout_lines }}"
+
+# =============================================================================
+# FASE 4: Configura kubeconfig locale
+# =============================================================================
+- name: Configure local kubeconfig
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Update server URL in local kubeconfig
+      ansible.builtin.replace:
+        path: "{{ playbook_dir }}/../kubeconfig.yaml"
+        regexp: 'https://127.0.0.1:6443'
+        replace: "https://{{ k3s_master_ip }}:6443"
+
+    - name: Display kubeconfig location
+      ansible.builtin.debug:
+        msg: |
+          Kubeconfig saved to: {{ playbook_dir }}/../kubeconfig.yaml
+          
+          To use it:
+            export KUBECONFIG={{ playbook_dir }}/../kubeconfig.yaml
+            kubectl get nodes
+

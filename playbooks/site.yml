@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# Playbook: Site - Deploy completo del cluster K3s
+# =============================================================================
+# Orchestratore principale che esegue tutti i playbook in ordine
+#
+# Uso:
+#   ansible-playbook playbooks/site.yml
+#
+# Per eseguire solo alcune fasi:
+#   ansible-playbook playbooks/site.yml --tags prepare
+#   ansible-playbook playbooks/site.yml --tags nfs
+#   ansible-playbook playbooks/site.yml --tags k3s
+#   ansible-playbook playbooks/site.yml --tags addons
+# =============================================================================
+
+- name: "Phase 1: Prepare Debian servers"
+  ansible.builtin.import_playbook: prepare-debian.yml
+  tags:
+    - prepare
+    - debian
+
+- name: "Phase 2: Deploy NFS Server"
+  ansible.builtin.import_playbook: deploy-nfs.yml
+  tags:
+    - nfs
+    - storage
+
+- name: "Phase 3: Deploy K3s Cluster"
+  ansible.builtin.import_playbook: deploy-k3s.yml
+  tags:
+    - k3s
+    - cluster
+
+- name: "Phase 4: Deploy K3s Addons"
+  ansible.builtin.import_playbook: deploy-addons.yml
+  tags:
+    - addons
+    - apps
+

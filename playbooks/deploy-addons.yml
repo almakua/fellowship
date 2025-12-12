@@ -1,0 +1,380 @@
+---
+# =============================================================================
+# Playbook: Deploy K3s Addons
+# =============================================================================
+# Installa tutti i componenti aggiuntivi:
+# - ServiceLB configuration
+# - NFS Provisioner
+# - Helm
+# - cert-manager con Let's Encrypt + Cloudflare DNS
+# - Prometheus + Grafana
+# - ArgoCD
+# =============================================================================
+
+- name: Deploy K3s Addons
+  hosts: k3s_masters
+  gather_facts: true
+  become: true
+
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+  tasks:
+    # =========================================================================
+    # HELM
+    # =========================================================================
+    - name: Check if Helm is installed
+      ansible.builtin.command: helm version --short
+      register: helm_check
+      changed_when: false
+      failed_when: false
+
+    - name: Download Helm install script
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get-helm.sh
+        mode: '0755'
+      when: helm_check.rc != 0
+
+    - name: Install Helm
+      ansible.builtin.command: /tmp/get-helm.sh
+      environment:
+        DESIRED_VERSION: "{{ helm_version }}"
+      when: helm_check.rc != 0
+      changed_when: true
+
+    - name: Add Helm repos
+      kubernetes.core.helm_repository:
+        name: "{{ item.name }}"
+        repo_url: "{{ item.url }}"
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      loop:
+        - { name: "jetstack", url: "https://charts.jetstack.io" }
+        - { name: "prometheus-community", url: "https://prometheus-community.github.io/helm-charts" }
+        - { name: "argo", url: "https://argoproj.github.io/argo-helm" }
+        - { name: "nfs-subdir-external-provisioner", url: "https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner" }
+
+    # =========================================================================
+    # SERVICELB CONFIGURATION (via configmap)
+    # =========================================================================
+    - name: Create kube-system ServiceLB config
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: servicelb-config
+            namespace: kube-system
+          data:
+            iprange: "{{ k3s_servicelb_range }}"
+
+    # =========================================================================
+    # NFS SUBDIR EXTERNAL PROVISIONER
+    # =========================================================================
+    - name: Create nfs-provisioner namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: nfs-provisioner
+
+    - name: Deploy NFS Subdir External Provisioner
+      kubernetes.core.helm:
+        kubeconfig: "{{ kubeconfig }}"
+        name: nfs-provisioner
+        chart_ref: nfs-subdir-external-provisioner/nfs-subdir-external-provisioner
+        release_namespace: nfs-provisioner
+        create_namespace: true
+        values:
+          nfs:
+            server: "{{ nfs_server_ip }}"
+            path: "{{ nfs_export_path }}"
+          storageClass:
+            name: nfs-client
+            defaultClass: true
+            reclaimPolicy: Retain
+            archiveOnDelete: true
+
+    - name: Wait for NFS provisioner to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Deployment
+        name: nfs-provisioner-nfs-subdir-external-provisioner
+        namespace: nfs-provisioner
+      register: nfs_provisioner
+      until:
+        - nfs_provisioner.resources | length > 0
+        - nfs_provisioner.resources[0].status.readyReplicas is defined
+        - nfs_provisioner.resources[0].status.readyReplicas >= 1
+      retries: 30
+      delay: 10
+
+    # =========================================================================
+    # CERT-MANAGER
+    # =========================================================================
+    - name: Create cert-manager namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: cert-manager
+
+    - name: Deploy cert-manager
+      kubernetes.core.helm:
+        kubeconfig: "{{ kubeconfig }}"
+        name: cert-manager
+        chart_ref: jetstack/cert-manager
+        chart_version: "{{ cert_manager_version }}"
+        release_namespace: cert-manager
+        create_namespace: true
+        values:
+          installCRDs: true
+          prometheus:
+            enabled: true
+            servicemonitor:
+              enabled: true
+
+    - name: Wait for cert-manager webhook to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Deployment
+        name: cert-manager-webhook
+        namespace: cert-manager
+      register: cert_manager_webhook
+      until:
+        - cert_manager_webhook.resources | length > 0
+        - cert_manager_webhook.resources[0].status.readyReplicas is defined
+        - cert_manager_webhook.resources[0].status.readyReplicas >= 1
+      retries: 30
+      delay: 10
+
+    - name: Create Cloudflare API token secret
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: cloudflare-api-token
+            namespace: cert-manager
+          type: Opaque
+          stringData:
+            api-token: "{{ cloudflare_api_token }}"
+      when: cloudflare_api_token is defined
+
+    - name: Create Let's Encrypt ClusterIssuer (staging)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt-staging
+          spec:
+            acme:
+              server: https://acme-staging-v02.api.letsencrypt.org/directory
+              email: "{{ cloudflare_email }}"
+              privateKeySecretRef:
+                name: letsencrypt-staging-account-key
+              solvers:
+                - dns01:
+                    cloudflare:
+                      email: "{{ cloudflare_email }}"
+                      apiTokenSecretRef:
+                        name: cloudflare-api-token
+                        key: api-token
+      when: cloudflare_api_token is defined
+
+    - name: Create Let's Encrypt ClusterIssuer (production)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt-prod
+          spec:
+            acme:
+              server: https://acme-v02.api.letsencrypt.org/directory
+              email: "{{ cloudflare_email }}"
+              privateKeySecretRef:
+                name: letsencrypt-prod-account-key
+              solvers:
+                - dns01:
+                    cloudflare:
+                      email: "{{ cloudflare_email }}"
+                      apiTokenSecretRef:
+                        name: cloudflare-api-token
+                        key: api-token
+      when: cloudflare_api_token is defined
+
+    # =========================================================================
+    # PROMETHEUS + GRAFANA (kube-prometheus-stack)
+    # =========================================================================
+    - name: Create monitoring namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: monitoring
+
+    - name: Deploy kube-prometheus-stack
+      kubernetes.core.helm:
+        kubeconfig: "{{ kubeconfig }}"
+        name: kube-prometheus-stack
+        chart_ref: prometheus-community/kube-prometheus-stack
+        chart_version: "{{ kube_prometheus_stack_version }}"
+        release_namespace: monitoring
+        create_namespace: true
+        values:
+          prometheus:
+            prometheusSpec:
+              retention: 15d
+              storageSpec:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: nfs-client
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 20Gi
+          grafana:
+            enabled: true
+            adminPassword: "admin"  # TODO: cambia in produzione!
+            persistence:
+              enabled: true
+              storageClassName: nfs-client
+              size: 5Gi
+            ingress:
+              enabled: true
+              ingressClassName: traefik
+              annotations:
+                cert-manager.io/cluster-issuer: letsencrypt-prod
+              hosts:
+                - "grafana.{{ public_domain }}"
+              tls:
+                - secretName: grafana-tls
+                  hosts:
+                    - "grafana.{{ public_domain }}"
+          alertmanager:
+            alertmanagerSpec:
+              storage:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: nfs-client
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 5Gi
+
+    # =========================================================================
+    # ARGOCD
+    # =========================================================================
+    - name: Create argocd namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: argocd
+
+    - name: Deploy ArgoCD
+      kubernetes.core.helm:
+        kubeconfig: "{{ kubeconfig }}"
+        name: argocd
+        chart_ref: argo/argo-cd
+        chart_version: "{{ argocd_version }}"
+        release_namespace: argocd
+        create_namespace: true
+        values:
+          configs:
+            params:
+              server.insecure: true  # TLS handled by ingress
+          server:
+            ingress:
+              enabled: true
+              ingressClassName: traefik
+              annotations:
+                cert-manager.io/cluster-issuer: letsencrypt-prod
+              hosts:
+                - "argocd.{{ public_domain }}"
+              tls:
+                - secretName: argocd-tls
+                  hosts:
+                    - "argocd.{{ public_domain }}"
+
+    - name: Wait for ArgoCD server to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Deployment
+        name: argocd-server
+        namespace: argocd
+      register: argocd_server
+      until:
+        - argocd_server.resources | length > 0
+        - argocd_server.resources[0].status.readyReplicas is defined
+        - argocd_server.resources[0].status.readyReplicas >= 1
+      retries: 30
+      delay: 10
+
+    - name: Get ArgoCD admin password
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Secret
+        name: argocd-initial-admin-secret
+        namespace: argocd
+      register: argocd_secret
+
+    - name: Display ArgoCD credentials
+      ansible.builtin.debug:
+        msg: |
+          ArgoCD deployed successfully!
+          URL: https://argocd.{{ public_domain }}
+          Username: admin
+          Password: {{ argocd_secret.resources[0].data.password | b64decode }}
+      when: argocd_secret.resources | length > 0
+
+    # =========================================================================
+    # SUMMARY
+    # =========================================================================
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          K3s Addons Deployment Complete!
+          ============================================================
+          
+          NFS Provisioner:
+            - Storage Class: nfs-client (default)
+            - NFS Server: {{ nfs_server_ip }}:{{ nfs_export_path }}
+          
+          cert-manager:
+            - ClusterIssuers: letsencrypt-staging, letsencrypt-prod
+            - DNS Challenge: Cloudflare
+          
+          Monitoring:
+            - Grafana: https://grafana.{{ public_domain }}
+            - Default password: admin (CHANGE IT!)
+          
+          GitOps:
+            - ArgoCD: https://argocd.{{ public_domain }}
+          
+          ============================================================
+
