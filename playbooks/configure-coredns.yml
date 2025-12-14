@@ -1,0 +1,141 @@
+---
+# =============================================================================
+# Playbook: Configure CoreDNS for Tailscale
+# =============================================================================
+# Configura CoreDNS per risolvere domini con CNAME verso Tailscale
+#
+# Uso:
+#   ansible-playbook playbooks/configure-coredns.yml
+#
+# Nota: Esegui dopo deploy-k3s.yml
+# =============================================================================
+
+- name: Configure CoreDNS for Tailscale DNS
+  hosts: k3s_masters
+  gather_facts: false
+  become: true
+
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    
+    # DNS Tailscale
+    tailscale_dns: "100.100.100.100"
+    fallback_dns: "8.8.8.8"
+    
+    # Entry statiche per domini con CNAME verso Tailscale
+    # Aggiungi qui tutti i domini pubblici che puntano a Tailscale
+    tailscale_hosts:
+      - ip: "100.120.136.89"
+        hostnames:
+          - "status.mbianchi.me"
+          - "aragorn.alpaca-scala.ts.net"
+      # Aggiungi altri come necessario:
+      # - ip: "100.x.x.x"
+      #   hostnames:
+      #     - "altro.mbianchi.me"
+
+  tasks:
+    - name: Get current CoreDNS ConfigMap
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: ConfigMap
+        name: coredns
+        namespace: kube-system
+      register: coredns_cm
+
+    - name: Build NodeHosts content
+      ansible.builtin.set_fact:
+        nodehosts_content: |
+          192.168.1.101 gandalf
+          192.168.1.102 aragorn
+          192.168.1.103 boromir
+          {% for entry in tailscale_hosts %}
+          {% for hostname in entry.hostnames %}
+          {{ entry.ip }} {{ hostname }}
+          {% endfor %}
+          {% endfor %}
+
+    - name: Build Corefile content
+      ansible.builtin.set_fact:
+        corefile_content: |
+          .:53 {
+              errors
+              health
+              ready
+              kubernetes cluster.local in-addr.arpa ip6.arpa {
+                pods insecure
+                fallthrough in-addr.arpa ip6.arpa
+              }
+              hosts /etc/coredns/NodeHosts {
+                ttl 60
+                reload 15s
+                fallthrough
+              }
+              prometheus :9153
+              forward . {{ tailscale_dns }} {{ fallback_dns }}
+              cache 30
+              loop
+              reload
+              loadbalance
+          }
+
+    - name: Update CoreDNS ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: coredns
+            namespace: kube-system
+          data:
+            Corefile: "{{ corefile_content }}"
+            NodeHosts: "{{ nodehosts_content }}"
+
+    - name: Restart CoreDNS to apply changes
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        kind: Pod
+        namespace: kube-system
+        label_selectors:
+          - k8s-app=kube-dns
+
+    - name: Wait for CoreDNS to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Deployment
+        name: coredns
+        namespace: kube-system
+      register: coredns_deployment
+      until:
+        - coredns_deployment.resources | length > 0
+        - coredns_deployment.resources[0].status.readyReplicas is defined
+        - coredns_deployment.resources[0].status.readyReplicas >= 1
+      retries: 30
+      delay: 5
+
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          CoreDNS Configured for Tailscale
+          ============================================================
+          
+          DNS Servers:
+            - Primary: {{ tailscale_dns }} (Tailscale MagicDNS)
+            - Fallback: {{ fallback_dns }}
+          
+          Static hosts configured:
+          {% for entry in tailscale_hosts %}
+          {% for hostname in entry.hostnames %}
+            - {{ hostname }} -> {{ entry.ip }}
+          {% endfor %}
+          {% endfor %}
+          
+          Per aggiungere altri domini, modifica la variabile tailscale_hosts
+          nel playbook o in inventory/group_vars/all.yml
+          
+          ============================================================
+

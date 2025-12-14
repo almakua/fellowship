@@ -12,6 +12,7 @@
 #   ansible-playbook playbooks/site.yml --tags nfs
 #   ansible-playbook playbooks/site.yml --tags k3s
 #   ansible-playbook playbooks/site.yml --tags addons
+#   ansible-playbook playbooks/site.yml --tags coredns
 # =============================================================================
 
 - name: "Phase 1: Prepare Debian servers"
@@ -32,7 +33,14 @@
     - k3s
     - cluster
 
-- name: "Phase 4: Deploy K3s Addons"
+- name: "Phase 4: Configure CoreDNS for Tailscale"
+  ansible.builtin.import_playbook: configure-coredns.yml
+  tags:
+    - coredns
+    - dns
+    - tailscale
+
+- name: "Phase 5: Deploy K3s Addons"
   ansible.builtin.import_playbook: deploy-addons.yml
   tags:
     - addons

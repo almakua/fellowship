@@ -65,6 +65,7 @@ ansible-playbook playbooks/site.yml --ask-become-pass --ask-vault-pass
 | **Add worker** | `ansible-playbook playbooks/add-worker.yml --limit <host>` | Nuovo nodo |
 | **Remove worker** | `ansible-playbook playbooks/remove-worker.yml -e node_to_remove=<host>` | Rimuovi nodo |
 | **Reset cluster** | `ansible-playbook playbooks/reset-cluster.yml` | Rimuovi tutto |
+| **CoreDNS Tailscale** | `ansible-playbook playbooks/configure-coredns.yml` | DNS per Tailscale |
 | **Uptime Kuma** | `ansible-playbook playbooks/apps/uptime-kuma.yml` | Status page |
 
 ## 🌐 Servizi
