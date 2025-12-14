@@ -18,10 +18,33 @@
   become: true
 
   tasks:
-    - name: Include prepare-debian tasks
-      ansible.builtin.include_tasks: ../playbooks/tasks/prepare-debian-tasks.yml
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - nfs-common
+        state: present
+        update_cache: true
 
-# Dopo la preparazione, join al cluster
+    - name: Load required kernel modules
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - br_netfilter
+        - overlay
+
+    - name: Set sysctl parameters
+      ansible.posix.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_set: true
+        state: present
+        reload: true
+      loop:
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { name: 'net.ipv4.ip_forward', value: '1' }
+
 - name: Join worker to cluster
   hosts: k3s_workers
   gather_facts: true

@@ -164,16 +164,22 @@
 # FASE 4: Configura kubeconfig locale
 # =============================================================================
 - name: Configure local kubeconfig
-  hosts: localhost
-  connection: local
+  hosts: k3s_masters
   gather_facts: false
+  become: true
 
   tasks:
-    - name: Update server URL in local kubeconfig
+    - name: Update server URL in kubeconfig
       ansible.builtin.replace:
-        path: "{{ playbook_dir }}/../kubeconfig.yaml"
+        path: /etc/rancher/k3s/k3s.yaml
         regexp: 'https://127.0.0.1:6443'
-        replace: "https://{{ k3s_master_ip }}:6443"
+        replace: "https://{{ ansible_host }}:6443"
+
+    - name: Fetch updated kubeconfig
+      ansible.builtin.fetch:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "{{ playbook_dir }}/../kubeconfig.yaml"
+        flat: true
 
     - name: Display kubeconfig location
       ansible.builtin.debug:
