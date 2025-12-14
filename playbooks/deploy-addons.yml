@@ -139,9 +139,9 @@
         values:
           installCRDs: true
           prometheus:
-            enabled: true
+            enabled: false
             servicemonitor:
-              enabled: true
+              enabled: false
 
     - name: Wait for cert-manager webhook to be ready
       kubernetes.core.k8s_info:
