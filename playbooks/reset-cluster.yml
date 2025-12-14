@@ -1,0 +1,191 @@
+---
+# =============================================================================
+# Playbook: Reset Cluster
+# =============================================================================
+# Rimuove completamente il cluster K3s e tutti i componenti
+#
+# Uso:
+#   ansible-playbook playbooks/reset-cluster.yml --ask-become-pass
+#
+# Per rimuovere anche i dati NFS:
+#   ansible-playbook playbooks/reset-cluster.yml --ask-become-pass -e "clean_nfs=true"
+# =============================================================================
+
+- name: Reset K3s Cluster
+  hosts: k3s_cluster
+  gather_facts: true
+  become: true
+  any_errors_fatal: false
+
+  vars:
+    clean_nfs: false  # Imposta a true per cancellare anche i dati NFS
+
+  tasks:
+    # =========================================================================
+    # Disinstalla K3s
+    # =========================================================================
+    - name: Check if k3s-uninstall script exists (server)
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s-uninstall.sh
+      register: k3s_server_uninstall
+
+    - name: Check if k3s-agent-uninstall script exists
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s-agent-uninstall.sh
+      register: k3s_agent_uninstall
+
+    - name: Uninstall k3s server
+      ansible.builtin.command: /usr/local/bin/k3s-uninstall.sh
+      when: k3s_server_uninstall.stat.exists
+      failed_when: false
+      changed_when: true
+
+    - name: Uninstall k3s agent
+      ansible.builtin.command: /usr/local/bin/k3s-agent-uninstall.sh
+      when: k3s_agent_uninstall.stat.exists
+      failed_when: false
+      changed_when: true
+
+    # =========================================================================
+    # Pulizia directory residue
+    # =========================================================================
+    - name: Remove k3s directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher
+        - /var/lib/rancher
+        - /var/lib/kubelet
+        - /var/lib/cni
+        - /var/log/pods
+        - /var/log/containers
+        - /run/k3s
+        - /run/flannel
+        - /etc/cni
+      failed_when: false
+
+    - name: Remove kubeconfig
+      ansible.builtin.file:
+        path: /root/.kube
+        state: absent
+      failed_when: false
+
+    # =========================================================================
+    # Pulizia iptables
+    # =========================================================================
+    - name: Flush iptables rules
+      ansible.builtin.shell: |
+        iptables -F
+        iptables -X
+        iptables -t nat -F
+        iptables -t nat -X
+        iptables -t mangle -F
+        iptables -t mangle -X
+        iptables -P INPUT ACCEPT
+        iptables -P FORWARD ACCEPT
+        iptables -P OUTPUT ACCEPT
+      failed_when: false
+      changed_when: true
+
+    # =========================================================================
+    # Rimuovi network interfaces residui
+    # =========================================================================
+    - name: Remove flannel interface
+      ansible.builtin.command: ip link delete flannel.1
+      failed_when: false
+      changed_when: true
+
+    - name: Remove cni0 interface
+      ansible.builtin.command: ip link delete cni0
+      failed_when: false
+      changed_when: true
+
+# =============================================================================
+# Pulizia NFS Server (solo su aragorn)
+# =============================================================================
+- name: Clean NFS Server
+  hosts: nfs_servers
+  gather_facts: false
+  become: true
+
+  vars:
+    clean_nfs: false
+
+  tasks:
+    - name: Remove NFS data (if requested)
+      ansible.builtin.file:
+        path: "{{ nfs_export_path }}"
+        state: absent
+      when: clean_nfs | bool
+
+    - name: Recreate empty NFS directory (if cleaned)
+      ansible.builtin.file:
+        path: "{{ nfs_export_path }}"
+        state: directory
+        owner: nobody
+        group: nogroup
+        mode: '0777'
+      when: clean_nfs | bool
+
+    - name: Stop NFS server
+      ansible.builtin.systemd:
+        name: nfs-kernel-server
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove NFS exports
+      ansible.builtin.lineinfile:
+        path: /etc/exports
+        regexp: "{{ nfs_export_path }}"
+        state: absent
+      failed_when: false
+
+# =============================================================================
+# Pulizia locale
+# =============================================================================
+- name: Clean local kubeconfig
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Remove local kubeconfig
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../kubeconfig.yaml"
+        state: absent
+      failed_when: false
+
+# =============================================================================
+# Summary
+# =============================================================================
+- name: Display reset summary
+  hosts: k3s_masters
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Reset complete
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          Cluster Reset Complete!
+          ============================================================
+          
+          ✅ K3s disinstallato da tutti i nodi
+          ✅ Directory di sistema pulite
+          ✅ Regole iptables resettate
+          ✅ Interfacce di rete rimosse
+          {% if clean_nfs | default(false) | bool %}
+          ✅ Dati NFS cancellati
+          {% else %}
+          ℹ️  Dati NFS conservati in {{ nfs_export_path }}
+             Per rimuoverli: -e "clean_nfs=true"
+          {% endif %}
+          
+          Per reinstallare:
+            ansible-playbook playbooks/site.yml --ask-become-pass
+          
+          ============================================================
+

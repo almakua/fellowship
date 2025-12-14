@@ -48,7 +48,7 @@ vim vault/secrets.yml
 ansible-vault encrypt vault/secrets.yml
 
 # 4. Deploy!
-ansible-playbook playbooks/site.yml --ask-vault-pass
+ansible-playbook playbooks/site.yml --ask-become-pass --ask-vault-pass
 ```
 
 👉 **Per istruzioni dettagliate, leggi [SETUP.md](SETUP.md)**
@@ -64,6 +64,7 @@ ansible-playbook playbooks/site.yml --ask-vault-pass
 | **Solo Addons** | `ansible-playbook playbooks/site.yml --tags addons` | Helm, monitoring, etc |
 | **Add worker** | `ansible-playbook playbooks/add-worker.yml --limit <host>` | Nuovo nodo |
 | **Remove worker** | `ansible-playbook playbooks/remove-worker.yml -e node_to_remove=<host>` | Rimuovi nodo |
+| **Reset cluster** | `ansible-playbook playbooks/reset-cluster.yml` | Rimuovi tutto |
 
 ## 🌐 Servizi
 

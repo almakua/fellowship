@@ -16,7 +16,8 @@ Guida passo-passo per il deployment del cluster K3s su Debian 13.
 8. [Configurazione DNS](#8-configurazione-dns)
 9. [Aggiungere Worker Nodes](#9-aggiungere-worker-nodes)
 10. [Rimuovere Worker Nodes](#10-rimuovere-worker-nodes)
-11. [Troubleshooting](#11-troubleshooting)
+11. [Reset Completo del Cluster](#11-reset-completo-del-cluster)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
@@ -563,7 +564,43 @@ Modifica `inventory/hosts.yml` e rimuovi l'host.
 
 ---
 
-## 11. Troubleshooting
+## 11. Reset Completo del Cluster
+
+Se vuoi rimuovere completamente k3s e tutti i componenti:
+
+### 11.1 Reset (mantieni dati NFS)
+
+```bash
+ansible-playbook playbooks/reset-cluster.yml --ask-become-pass
+```
+
+### 11.2 Reset completo (cancella anche dati NFS)
+
+```bash
+ansible-playbook playbooks/reset-cluster.yml --ask-become-pass -e "clean_nfs=true"
+```
+
+### 11.3 Cosa viene rimosso
+
+| Componente | Reset base | Con `clean_nfs=true` |
+|------------|------------|----------------------|
+| K3s (server + agent) | ✅ | ✅ |
+| Directory `/etc/rancher`, `/var/lib/rancher` | ✅ | ✅ |
+| Regole iptables | ✅ | ✅ |
+| Interfacce di rete (flannel, cni0) | ✅ | ✅ |
+| Kubeconfig locale | ✅ | ✅ |
+| NFS server config | ✅ | ✅ |
+| Dati in `/srv/nfs/k3s` | ❌ | ✅ |
+
+Dopo il reset puoi reinstallare con:
+
+```bash
+ansible-playbook playbooks/site.yml --ask-become-pass --ask-vault-pass
+```
+
+---
+
+## 12. Troubleshooting
 
 ### K3s non parte
 

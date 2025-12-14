@@ -36,7 +36,7 @@ k3s_master_hostname: aragorn
 k3s_flannel_backend: vxlan
 
 # ServiceLB IP range
-k3s_servicelb_range: "192.168.1.201-192.168.1.220"
+k3s_servicelb_range: "192.168.1.201-192.168.1.240"
 
 # Disabilita componenti non necessari
 k3s_disable:
