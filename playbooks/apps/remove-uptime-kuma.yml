@@ -1,0 +1,80 @@
+---
+# =============================================================================
+# Playbook: Remove Uptime Kuma
+# =============================================================================
+# Rimuove completamente Uptime Kuma dal cluster
+#
+# Uso:
+#   ansible-playbook playbooks/apps/remove-uptime-kuma.yml
+#
+# Per mantenere i dati:
+#   ansible-playbook playbooks/apps/remove-uptime-kuma.yml -e "keep_data=true"
+# =============================================================================
+
+- name: Remove Uptime Kuma
+  hosts: k3s_masters
+  gather_facts: false
+  become: true
+
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    namespace: uptime-kuma
+    app_name: uptime-kuma
+    keep_data: false
+
+  tasks:
+    - name: Delete Ingress
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        kind: Ingress
+        name: "{{ app_name }}"
+        namespace: "{{ namespace }}"
+      failed_when: false
+
+    - name: Delete Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        kind: Service
+        name: "{{ app_name }}"
+        namespace: "{{ namespace }}"
+      failed_when: false
+
+    - name: Delete Deployment
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace }}"
+      failed_when: false
+
+    - name: Delete PVC (if not keeping data)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        kind: PersistentVolumeClaim
+        name: "{{ app_name }}-data"
+        namespace: "{{ namespace }}"
+      when: not keep_data | bool
+      failed_when: false
+
+    - name: Delete Namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        kind: Namespace
+        name: "{{ namespace }}"
+      failed_when: false
+
+    - name: Removal complete
+      ansible.builtin.debug:
+        msg: |
+          Uptime Kuma removed.
+          {% if keep_data %}
+          PVC mantenuto: {{ app_name }}-data
+          {% else %}
+          Tutti i dati sono stati eliminati.
+          {% endif %}
+

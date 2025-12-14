@@ -1,0 +1,231 @@
+---
+# =============================================================================
+# Playbook: Deploy Uptime Kuma
+# =============================================================================
+# Monitoring e status page self-hosted
+#
+# Uso:
+#   ansible-playbook playbooks/apps/uptime-kuma.yml
+#
+# Accesso:
+#   - Interno: http://uptime-kuma.uptime-kuma.svc.cluster.local:3001
+#   - Esterno: https://status.mbianchi.me (se configurato ingress)
+# =============================================================================
+
+- name: Deploy Uptime Kuma
+  hosts: k3s_masters
+  gather_facts: false
+  become: true
+
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    namespace: uptime-kuma
+    app_name: uptime-kuma
+    image: louislam/uptime-kuma:1
+    storage_size: 5Gi
+    domain: "status.{{ public_domain }}"
+    enable_ingress: true
+
+  tasks:
+    # =========================================================================
+    # Namespace
+    # =========================================================================
+    - name: Create namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ namespace }}"
+
+    # =========================================================================
+    # PersistentVolumeClaim
+    # =========================================================================
+    - name: Create PVC for Uptime Kuma data
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{ app_name }}-data"
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: nfs-client
+            resources:
+              requests:
+                storage: "{{ storage_size }}"
+
+    # =========================================================================
+    # Deployment
+    # =========================================================================
+    - name: Create Deployment
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace }}"
+            labels:
+              app: "{{ app_name }}"
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: "{{ app_name }}"
+            strategy:
+              type: Recreate
+            template:
+              metadata:
+                labels:
+                  app: "{{ app_name }}"
+              spec:
+                containers:
+                  - name: "{{ app_name }}"
+                    image: "{{ image }}"
+                    ports:
+                      - containerPort: 3001
+                        name: http
+                    volumeMounts:
+                      - name: data
+                        mountPath: /app/data
+                    resources:
+                      requests:
+                        memory: "128Mi"
+                        cpu: "100m"
+                      limits:
+                        memory: "512Mi"
+                        cpu: "500m"
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 3001
+                      initialDelaySeconds: 30
+                      periodSeconds: 10
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 3001
+                      initialDelaySeconds: 5
+                      periodSeconds: 5
+                volumes:
+                  - name: data
+                    persistentVolumeClaim:
+                      claimName: "{{ app_name }}-data"
+
+    # =========================================================================
+    # Service
+    # =========================================================================
+    - name: Create Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace }}"
+            labels:
+              app: "{{ app_name }}"
+          spec:
+            type: ClusterIP
+            ports:
+              - port: 3001
+                targetPort: 3001
+                protocol: TCP
+                name: http
+            selector:
+              app: "{{ app_name }}"
+
+    # =========================================================================
+    # Ingress (opzionale)
+    # =========================================================================
+    - name: Create Ingress
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace }}"
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+              traefik.ingress.kubernetes.io/router.entrypoints: websecure
+              traefik.ingress.kubernetes.io/router.tls: "true"
+          spec:
+            ingressClassName: traefik
+            tls:
+              - hosts:
+                  - "{{ domain }}"
+                secretName: "{{ app_name }}-tls"
+            rules:
+              - host: "{{ domain }}"
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: "{{ app_name }}"
+                          port:
+                            number: 3001
+      when: enable_ingress
+
+    # =========================================================================
+    # Wait for deployment
+    # =========================================================================
+    - name: Wait for Uptime Kuma to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace }}"
+      register: deployment_status
+      until:
+        - deployment_status.resources | length > 0
+        - deployment_status.resources[0].status.readyReplicas is defined
+        - deployment_status.resources[0].status.readyReplicas >= 1
+      retries: 30
+      delay: 10
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+    - name: Display deployment info
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          Uptime Kuma Deployed Successfully!
+          ============================================================
+          
+          Namespace: {{ namespace }}
+          
+          Accesso interno:
+            kubectl port-forward svc/{{ app_name }} -n {{ namespace }} 3001:3001
+            http://localhost:3001
+          
+          {% if enable_ingress %}
+          Accesso esterno:
+            https://{{ domain }}
+          
+          Nota: Configura DNS per {{ domain }} -> IP del cluster
+          {% endif %}
+          
+          Prima configurazione:
+            1. Apri l'interfaccia web
+            2. Crea account admin
+            3. Inizia ad aggiungere monitor!
+          
+          ============================================================
+
