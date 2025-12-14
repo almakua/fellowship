@@ -17,22 +17,8 @@
 
   vars:
     kubeconfig: /etc/rancher/k3s/k3s.yaml
-    
-    # DNS Tailscale
-    tailscale_dns: "100.100.100.100"
-    fallback_dns: "8.8.8.8"
-    
-    # Entry statiche per domini con CNAME verso Tailscale
-    # Aggiungi qui tutti i domini pubblici che puntano a Tailscale
-    tailscale_hosts:
-      - ip: "100.120.136.89"
-        hostnames:
-          - "status.mbianchi.me"
-          - "aragorn.alpaca-scala.ts.net"
-      # Aggiungi altri come necessario:
-      # - ip: "100.x.x.x"
-      #   hostnames:
-      #     - "altro.mbianchi.me"
+    # Le variabili tailscale_dns, fallback_dns e tailscale_hosts
+    # sono definite in inventory/group_vars/all.yml
 
   tasks:
     - name: Get current CoreDNS ConfigMap
