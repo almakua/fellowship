@@ -74,6 +74,16 @@ tailscale_hosts:
     hostnames:
       - "status.mbianchi.me"
       - "aragorn.alpaca-scala.ts.net"
+      - "argocd.mbianchi.me"
+      - "grafana.mbianchi.me"
+      - "prometheus.mbianchi.me"
+      - "jellyfin.mbianchi.me"
+      - "radarr.mbianchi.me"
+      - "sonarr.mbianchi.me"
+      - "qbittorrent.mbianchi.me"
+      - "lidarr.mbianchi.me"
+      - "prowlarr.mbianchi.me"
+      - "ntfy.mbianchi.me"
   # Aggiungi altri come necessario:
   # - ip: "100.x.x.x"
   #   hostnames:
