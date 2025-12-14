@@ -54,7 +54,7 @@ cloudflare_email: ""  # TODO: inserisci la tua email Cloudflare
 # =============================================================================
 helm_version: v3.16.2
 cert_manager_version: v1.16.2
-argocd_version: v2.13.1
+argocd_chart_version: "7.7.5"  # Chart version, NOT app version
 
 # Prometheus stack (via helm chart)
 kube_prometheus_stack_version: 66.2.1

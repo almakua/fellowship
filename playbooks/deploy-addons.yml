@@ -300,7 +300,7 @@
         kubeconfig: "{{ kubeconfig }}"
         name: argocd
         chart_ref: argo/argo-cd
-        chart_version: "{{ argocd_version }}"
+        chart_version: "{{ argocd_chart_version }}"
         release_namespace: argocd
         create_namespace: true
         values:
