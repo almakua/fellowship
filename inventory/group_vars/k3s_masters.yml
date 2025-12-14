@@ -12,5 +12,6 @@ k3s_server_extra_args:
   - "--tls-san=aragorn"
   - "--tls-san=aragorn.{{ internal_domain }}"
   - "--flannel-backend={{ k3s_flannel_backend }}"
+  - "--disable=servicelb"
   - "--kube-apiserver-arg=service-node-port-range=30000-32767"
 

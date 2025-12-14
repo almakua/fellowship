@@ -38,7 +38,9 @@ k3s_flannel_backend: vxlan
 # ServiceLB IP range
 k3s_servicelb_range: "192.168.1.201-192.168.1.240"
 
-# ServiceLB è abilitato di default in k3s
+# ServiceLB disabilitato (usiamo nginx esterno)
+k3s_disable:
+  - servicelb
 
 # =============================================================================
 # Cloudflare (per cert-manager DNS challenge)
