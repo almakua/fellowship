@@ -84,6 +84,9 @@ tailscale_hosts:
       - "lidarr.mbianchi.me"
       - "prowlarr.mbianchi.me"
       - "ntfy.mbianchi.me"
+      - "bazarr.mbianchi.me"
+      - "homepage.mbianchi.me"
+      - "jellyseerr.mbianchi.me"
   # Aggiungi altri come necessario:
   # - ip: "100.x.x.x"
   #   hostnames:
